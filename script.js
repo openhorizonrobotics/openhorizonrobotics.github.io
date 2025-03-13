@@ -183,6 +183,17 @@ const map = new ol.Map({
     ]
 });
 
+// Load events data
+let eventsData = [];
+fetch('data/revels_events.json')
+    .then(response => response.json())
+    .then(data => {
+        if (data.ok) {
+            eventsData = data.data;
+        }
+    })
+    .catch(error => console.error('Error loading events:', error));
+
 // Vector Sources Array and Layers Object
 const vectorSources = [];
 const layers = {};
@@ -241,6 +252,85 @@ Object.entries(layerConfigs).forEach(([id, config]) => {
     addGeoJSONLayer(config.url, config.style, id);
 });
 
+// Add location pointer for "MIT Ground"
+const sportsSource = layers.sports.getSource();
+sportsSource.once('change', function() {
+    if (sportsSource.getState() === 'ready') {
+        const mitGround = sportsSource.getFeatures().find(feature => 
+            feature.get('Sports') === 'MIT Ground'
+        );
+        if (mitGround) {
+            const geometry = mitGround.getGeometry();
+            const centroid = ol.extent.getCenter(geometry.getExtent());
+
+            const pointer = new ol.Feature({
+                geometry: new ol.geom.Point(centroid),
+            });
+            pointer.setStyle(new ol.style.Style({
+                image: new ol.style.Icon({
+                    src: 'https://cdn-icons-png.flaticon.com/512/684/684908.png', // Free pin icon
+                    scale: 0.05, // Adjust size as needed
+                    anchor: [0.5, 1], // Bottom-center of the pin
+                }),
+            }));
+
+            pointerSource.addFeature(pointer);
+        }
+    }
+});
+// Add pointers for additional event locations
+const additionalLocations = [
+    { layerId: 'shops', property: 'Shops', value: 'Student Plaza' },
+    { layerId: 'academic', property: 'Name', value: 'AB1' },
+    { layerId: 'academic', property: 'Name', value: 'AB2' },
+    { layerId: 'academic', property: 'Name', value: 'AB3' },
+    { layerId: 'academic', property: 'Name', value: 'AB5' },
+    { layerId: 'academic', property: 'Name', value: 'Library' },
+    { layerId: 'academic', property: 'Name', value: 'KEF R&D Centre' },
+];
+
+additionalLocations.forEach(location => {
+    const source = layers[location.layerId].getSource();
+    source.once('change', function() {
+        if (source.getState() === 'ready') {
+            const feature = source.getFeatures().find(f => 
+                f.get(location.property) === location.value
+            );
+            if (feature) {
+                const geometry = feature.getGeometry();
+                const centroid = ol.extent.getCenter(geometry.getExtent());
+                const pointer = new ol.Feature({
+                    geometry: new ol.geom.Point(centroid),
+                    name: location.value, // Store for reference
+                });
+                pointer.setStyle(new ol.style.Style({
+                    image: new ol.style.Icon({
+                        src: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
+                        scale: 0.05,
+                        anchor: [0.5, 1],
+                    }),
+                }));
+                pointerSource.addFeature(pointer);
+            }
+        }
+    });
+});
+
+// Click handler for pointers
+map.on('click', function(event) {
+    const feature = map.forEachFeatureAtPixel(event.pixel, function(feat, layer) {
+        return layer === pointerLayer ? feat : null; // Only detect pointerLayer features
+    });
+
+    if (feature) {
+        const locationName = feature.get('name');
+        showEventsPopup(locationName);
+    } else {
+        const popup = document.getElementById('eventsPopup');
+        popup.classList.remove('active');
+    }
+});
+
 // User Position Tracking
 let userPositionSource = new ol.source.Vector();
 let userPositionLayer = new ol.layer.Vector({
@@ -262,6 +352,14 @@ let userPositionLayer = new ol.layer.Vector({
 
 // Add user position layer to map
 map.addLayer(userPositionLayer);
+
+// Pointer layer for event tracking
+const pointerSource = new ol.source.Vector();
+const pointerLayer = new ol.layer.Vector({
+    source: pointerSource,
+    zIndex: 1001 // Above other layers, including user position
+});
+map.addLayer(pointerLayer);
 
 // User position tracking feature
 let userPositionFeature = new ol.Feature();
@@ -667,3 +765,56 @@ setInterval(updateTime, 1000);
 // Initialize Map
 fitMapToFeatures();
 updateTime();
+
+// Show events popup
+function showEventsPopup(locationName) {
+    const relevantEvents = eventsData.filter(event => 
+        (event.Name && event.Name === locationName) ||
+        (event.Shops && event.Shops === locationName) ||
+        (event.Sports && event.Sports === locationName)
+    );
+
+    const popup = document.getElementById('eventsPopup');
+    const content = document.getElementById('eventsContent');
+
+    // Clear previous content
+    content.innerHTML = '';
+
+    // Build events list
+    content.innerHTML = `
+        <h2>Events at ${locationName}</h2>
+        <ul class="events-list">
+            ${relevantEvents.map(event => `
+                <li class="event-item" onclick="showEventDetails('${event.event_name.replace(/'/g, "\\'")}', '${locationName.replace(/'/g, "\\'")}')">
+                    <strong>${event.event_name}</strong><br>
+                    ${new Date(event.event_date).toLocaleDateString()} ${event.event_time}
+                </li>
+            `).join('')}
+        </ul>
+    `;
+
+    popup.classList.add('active');
+}
+
+// Show event details
+function showEventDetails(eventName, locationName) {
+    const event = eventsData.find(e => 
+        e.event_name === eventName && (
+            (e.Name && e.Name === locationName) ||
+            (e.Shops && e.Shops === locationName) ||
+            (e.Sports && e.Sports === locationName)
+        )
+    );
+
+    const content = document.getElementById('eventsContent');
+    content.innerHTML = `
+        <h2>${event.event_name}</h2>
+        <p><strong>Type:</strong> ${event.event_type}</p>
+        <p><strong>Description:</strong> ${event.event_desc.replace(/\n/g, '<br>')}</p>
+        <p><strong>Date:</strong> ${new Date(event.event_date).toLocaleDateString()}</p>
+        <p><strong>Time:</strong> ${event.event_time}</p>
+        <p><strong>Venue:</strong> ${event.venue_name}</p>
+        <p><strong>Team Type:</strong> ${event.team_type}</p>
+        <button onclick="showEventsPopup('${locationName.replace(/'/g, "\\'")}')">Back to Events</button>
+    `;
+}
